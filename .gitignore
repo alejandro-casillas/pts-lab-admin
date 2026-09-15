@@ -1,0 +1,32 @@
+# Logs generados
+logs/*
+!logs/.gitkeep
+
+# Archivos temporales
+*.log
+*.tmp
+*.bak
+
+# Secretos y credenciales
+secrets/
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Configuración sensible local
+.env
+.env.*
+credentials.json
+secrets.json
+
+# PowerShell / herramientas
+*.clixml
+
+# Sistema operativo
+Thumbs.db
+Desktop.ini
+
+# Editores
+.vscode/
+.idea/
