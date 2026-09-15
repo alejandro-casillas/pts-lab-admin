@@ -1,0 +1,16 @@
+{
+    "schemaVersion": 1,
+    "lab": {
+        "id": "A",
+        "name": "Laboratorio A",
+        "computerPrefix": "LAB-A-PC",
+        "teacherComputer": {
+            "number": 0,
+            "hostname": "LAB-A-PC00"
+        },
+        "studentComputers": {
+            "first": 1,
+            "last": 40
+        }
+    }
+}

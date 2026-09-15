@@ -1,0 +1,57 @@
+{
+    "schemaVersion": 1,
+    "standardVersion": "1.0.0",
+    "platform": {
+        "operatingSystem": "Windows 11",
+        "edition": "Pro"
+    },
+    "accounts": {
+        "student": {
+            "username": "Alumnos",
+            "mustExist": true,
+            "mustBeAdministrator": false
+        },
+        "support": {
+            "username": "Soporte",
+            "mustExist": true,
+            "mustBeAdministrator": true
+        }
+    },
+    "applicationControl": {
+        "enabled": true,
+        "engine": "AppLocker",
+        "blockCmd": true,
+        "blockPowerShell": true,
+        "blockPowerShellISE": true,
+        "blockRegistryEditor": true,
+        "blockMMC": true,
+        "allowUsbStorage": true,
+        "allowExecutionFromUsb": false,
+        "dllRulesEnabled": false
+    },
+    "windowsPolicies": {
+        "blockMicrosoftStore": true,
+        "blockControlPanelAndSettings": true,
+        "lockWallpaper": true,
+        "lockAppearance": true,
+        "lockScreenSaver": true,
+        "lockDesktopIcons": true,
+        "lockMousePointers": true,
+        "lockSounds": true,
+        "allowTaskManager": true,
+        "allowFileExplorer": true
+    },
+    "desktop": {
+        "wallpaper": "assets/wallpapers/pts-default.jpg",
+        "protectInstitutionalShortcuts": true,
+        "allowStudentFiles": true
+    },
+    "cleanup": {
+        "enabled": false,
+        "mode": "not-configured"
+    },
+    "veyon": {
+        "required": true,
+        "serviceRequired": true
+    }
+}
