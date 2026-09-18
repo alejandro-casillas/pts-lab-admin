@@ -51,7 +51,7 @@ if (-not (Test-Path $LogsDirectory)) {
 
 try {
     $Standard = Get-Content $StandardPath -Raw |
-        ConvertFrom-Json
+    ConvertFrom-Json
 }
 catch {
     Write-Error "No se pudo leer standard.json: $($_.Exception.Message)"
@@ -158,10 +158,10 @@ function Audit-AppLockerPolicy {
                         $sid = if ($r.UserOrGroupSid) { $r.UserOrGroupSid } else { "UNKNOWN" }
 
                         $ruleType = switch ($r.LocalName) {
-                            "FilePathRule"      { "Path" }
+                            "FilePathRule" { "Path" }
                             "FilePublisherRule" { "Publisher" }
-                            "FileHashRule"      { "Hash" }
-                            default             { if ($r.LocalName) { $r.LocalName } else { "UNKNOWN" } }
+                            "FileHashRule" { "Hash" }
+                            default { if ($r.LocalName) { $r.LocalName } else { "UNKNOWN" } }
                         }
 
                         $condition = "UNKNOWN"
@@ -288,7 +288,7 @@ try {
             if ($lab.teacherComputer.hostname -and ($ComputerName -eq $lab.teacherComputer.hostname)) {
                 $isTeacher = $true
             }
-            elseif ($lab.teacherComputer.number -ne $null) {
+            elseif ($null -ne $lab.teacherComputer.number) {
                 $prefix = $lab.computerPrefix
                 $suffix = $ComputerName.Substring($prefix.Length)
                 $parsed = 0
@@ -300,7 +300,7 @@ try {
 
         if ($isTeacher) {
             $expectedRole = "Teacher"
-            if ($lab.teacherComputer.number -ne $null) {
+            if ($null -ne $lab.teacherComputer.number) {
                 $computerNumber = $lab.teacherComputer.number
             }
         }
@@ -482,10 +482,10 @@ Write-Audit "-------------------- VEYON --------------------"
 
 try {
     $VeyonServices = Get-Service |
-        Where-Object {
-            $_.Name -like "*veyon*" -or
-            $_.DisplayName -like "*Veyon*"
-        }
+    Where-Object {
+        $_.Name -like "*veyon*" -or
+        $_.DisplayName -like "*Veyon*"
+    }
 
     if ($VeyonServices) {
         foreach ($Service in $VeyonServices) {

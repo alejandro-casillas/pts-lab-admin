@@ -30,3 +30,7 @@ Desktop.ini
 # Editores
 .vscode/
 .idea/
+
+# Backups locales generados por los scripts
+backups/*
+!backups/.gitkeep
