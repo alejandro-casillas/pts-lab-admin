@@ -10,14 +10,14 @@
     reemplazadas posteriormente por el estandar de pts-lab-admin.
 
     Actualmente administra:
-      - Politica AppLocker local legacy.
+      - Politica AppLocker local legacy (declarada y runtime).
       - MLGPO legacy "No administradores" (S-1-5-32-545).
 
     Antes de modificar:
       - valida privilegios y configuracion del proyecto;
       - valida que el equipo pertenezca a un laboratorio configurado;
       - valida usuarios requeridos;
-      - inventaria AppLocker;
+      - inventaria AppLocker (politica declarada Y archivos runtime);
       - crea respaldo restaurable de los artefactos que va a tocar.
 
     Por defecto NO modifica Windows.
@@ -25,6 +25,9 @@
     Para realizar cambios reales debe utilizarse explicitamente:
 
         .\scripts\02-CleanLegacyPolicies.ps1 -Apply
+
+    NOTA: Si se eliminan archivos runtime de AppLocker, se requiere
+    reiniciar Windows antes de considerar la limpieza verificada.
 
 .NOTES
     Proyecto: pts-lab-admin
@@ -59,6 +62,18 @@ $ExpectedLegacyExeSids = @(
     "S-1-1-0",
     "S-1-5-32-544"
 )
+
+# GUID de las reglas AppLocker legacy conocidas.
+# EXE: 921cc481, a61c8b2c, fd686d83
+# APPX: a9e18c21
+$ExpectedLegacyAppLockerRuleIds = @(
+    "921cc481-6e17-4653-8f75-050b80acca20",
+    "a61c8b2c-a319-4cd0-9690-d2177cad7b51",
+    "fd686d83-a829-4351-8ff4-27c7de5755d2",
+    "a9e18c21-ff8f-43cf-b9fc-db40eed693ba"
+)
+
+$AppLockerRuntimeDirectory = "C:\Windows\System32\AppLocker"
 
 # ------------------------------------------------------------
 # 2. RUTAS DEL PROYECTO
@@ -398,7 +413,7 @@ Write-CleanLog "[OK] Rol esperado: $ExpectedRole"
 Write-CleanLog "     Numero:       $ComputerNumber"
 
 # ------------------------------------------------------------
-# 11. INVENTARIO APPLOCKER
+# 11. INVENTARIO APPLOCKER - POLITICA DECLARADA
 # ------------------------------------------------------------
 
 Write-CleanLog ""
@@ -406,7 +421,8 @@ Write-CleanLog "-------------------- APPLOCKER LEGACY --------------------"
 
 $AppLockerXmlString = $null
 $AppLockerXml = $null
-$AppLockerLegacyRecognized = $false
+$DeclaredLocalLegacy = $false
+$DeclaredUnknown = $false
 
 try {
 
@@ -418,7 +434,7 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($AppLockerXmlString)) {
 
-        Write-CleanLog "[INFO] No existe politica AppLocker local."
+        Write-CleanLog "[INFO] No existe politica AppLocker local declarada."
 
     }
     else {
@@ -493,11 +509,12 @@ try {
             }
         )
 
-        Write-CleanLog "EXE:     $($ExeRules.Count) regla(s)"
-        Write-CleanLog "MSI:     $($MsiRules.Count) regla(s)"
-        Write-CleanLog "SCRIPT:  $($ScriptRules.Count) regla(s)"
-        Write-CleanLog "APPX:    $($AppxRules.Count) regla(s)"
-        Write-CleanLog "DLL:     $($DllRules.Count) regla(s)"
+        Write-CleanLog "Politica declarada (Local):"
+        Write-CleanLog "  EXE:     $($ExeRules.Count) regla(s)"
+        Write-CleanLog "  MSI:     $($MsiRules.Count) regla(s)"
+        Write-CleanLog "  SCRIPT:  $($ScriptRules.Count) regla(s)"
+        Write-CleanLog "  APPX:    $($AppxRules.Count) regla(s)"
+        Write-CleanLog "  DLL:     $($DllRules.Count) regla(s)"
 
         # ----------------------------------------------------
         # Reconocer exactamente el AppLocker legacy conocido.
@@ -564,27 +581,184 @@ try {
         ($ScriptRules.Count -eq 0) -and
         ($DllRules.Count -eq 0)
 
-        $AppLockerLegacyRecognized =
-        $ExeMatches -and
-        $AppxMatches -and
-        $EmptyCollectionsMatch
+        $TotalDeclaredRules =
+        $ExeRules.Count +
+        $MsiRules.Count +
+        $ScriptRules.Count +
+        $AppxRules.Count +
+        $DllRules.Count
 
-        if ($AppLockerLegacyRecognized) {
+        if ($TotalDeclaredRules -eq 0) {
+
+            $DeclaredLocalLegacy = $false
+            $DeclaredUnknown = $false
+
             Write-CleanLog `
-                "[OK] AppLocker coincide con el patron legacy conocido."
+                "[OK] Politica AppLocker declarada vacia (0 reglas)."
         }
         else {
-            Write-CleanLog `
-                "[WARN] AppLocker NO coincide exactamente con el patron legacy conocido."
-            Write-CleanLog `
-                "       Esta politica NO sera eliminada automaticamente."
+
+            $DeclaredLocalLegacy =
+            $ExeMatches -and
+            $AppxMatches -and
+            $EmptyCollectionsMatch
+
+            if ($DeclaredLocalLegacy) {
+
+                $DeclaredUnknown = $false
+
+                Write-CleanLog `
+                    "[OK] Politica declarada coincide con el patron legacy conocido."
+            }
+            else {
+
+                $DeclaredUnknown = $true
+
+                Write-CleanLog `
+                    "[WARN] Politica AppLocker declarada contiene reglas no reconocidas."
+                Write-CleanLog `
+                    "       La politica declarada NO sera eliminada automaticamente."
+            }
         }
     }
 }
 catch {
     Stop-Clean `
-        "No fue posible inspeccionar AppLocker: $($_.Exception.Message)"
+        "No fue posible inspeccionar AppLocker declarado: $($_.Exception.Message)"
 }
+
+# ------------------------------------------------------------
+# 11b. INVENTARIO APPLOCKER - RUNTIME
+# ------------------------------------------------------------
+
+Write-CleanLog ""
+Write-CleanLog "Runtime AppLocker ($AppLockerRuntimeDirectory):"
+
+$RuntimeLegacy = $false
+$RuntimeFiles = @()
+$RuntimeUnknown = $false
+
+try {
+
+    $RuntimeFiles = @(
+        Get-ChildItem `
+            -Path "$AppLockerRuntimeDirectory\*.AppLocker" `
+            -ErrorAction SilentlyContinue
+    )
+
+    if ($RuntimeFiles.Count -eq 0) {
+
+        Write-CleanLog "  [INFO] No existen archivos *.AppLocker runtime."
+
+    }
+    else {
+
+        Write-CleanLog "  [INFO] $($RuntimeFiles.Count) archivo(s) *.AppLocker encontrado(s):"
+
+        foreach ($RuntimeFile in $RuntimeFiles) {
+            Write-CleanLog "         $($RuntimeFile.Name)  ($($RuntimeFile.Length) bytes)"
+        }
+
+        # Buscar GUID legacy conocidos dentro de los archivos
+        # binarios usando codificacion ASCII + Unicode.
+
+        $LegacyGuidsFound = @()
+
+        foreach ($RuntimeFile in $RuntimeFiles) {
+
+            try {
+
+                $FileBytes =
+                [System.IO.File]::ReadAllBytes(
+                    $RuntimeFile.FullName
+                )
+
+                $TextContent =
+                [System.Text.Encoding]::ASCII.GetString(
+                    $FileBytes
+                ) +
+                [System.Text.Encoding]::Unicode.GetString(
+                    $FileBytes
+                )
+
+                foreach ($Guid in $ExpectedLegacyAppLockerRuleIds) {
+
+                    if (
+                        $TextContent.IndexOf(
+                            $Guid,
+                            [System.StringComparison]::OrdinalIgnoreCase
+                        ) -ge 0
+                    ) {
+                        if ($LegacyGuidsFound -notcontains $Guid) {
+                            $LegacyGuidsFound += $Guid
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-CleanLog `
+                    "  [WARN] No fue posible leer $($RuntimeFile.Name): $($_.Exception.Message)"
+            }
+        }
+
+        if (
+            $LegacyGuidsFound.Count -eq
+            $ExpectedLegacyAppLockerRuleIds.Count
+        ) {
+
+            $RuntimeLegacy = $true
+
+            Write-CleanLog `
+                "  [OK] Todos los GUID legacy reconocidos en runtime: $($LegacyGuidsFound.Count)/$($ExpectedLegacyAppLockerRuleIds.Count)"
+
+            foreach ($FoundGuid in $LegacyGuidsFound) {
+                Write-CleanLog "       $FoundGuid"
+            }
+        }
+        elseif ($LegacyGuidsFound.Count -gt 0) {
+
+            $RuntimeUnknown = $true
+
+            Write-CleanLog `
+                "  [WARN] Coincidencia parcial de GUID legacy: $($LegacyGuidsFound.Count)/$($ExpectedLegacyAppLockerRuleIds.Count)"
+
+            foreach ($FoundGuid in $LegacyGuidsFound) {
+                Write-CleanLog "       $FoundGuid"
+            }
+
+            Write-CleanLog `
+                "         Runtime con coincidencia parcial: NO sera eliminado automaticamente."
+        }
+        else {
+
+            $RuntimeUnknown = $true
+
+            Write-CleanLog `
+                "  [WARN] Existen archivos *.AppLocker pero NO contienen GUID legacy conocidos."
+            Write-CleanLog `
+                "         Runtime desconocido: NO sera eliminado automaticamente."
+        }
+    }
+}
+catch {
+    Write-CleanLog `
+        "  [WARN] No fue posible inventariar runtime AppLocker: $($_.Exception.Message)"
+}
+
+# Determinar estado combinado de AppLocker.
+$AppLockerClean =
+(-not $DeclaredLocalLegacy) -and
+(-not $DeclaredUnknown) -and
+(-not $RuntimeLegacy) -and
+(-not $RuntimeUnknown)
+
+Write-CleanLog ""
+Write-CleanLog "Resumen estado AppLocker:"
+Write-CleanLog "  DeclaredLocalLegacy: $DeclaredLocalLegacy"
+Write-CleanLog "  DeclaredUnknown:     $DeclaredUnknown"
+Write-CleanLog "  RuntimeLegacy:       $RuntimeLegacy"
+Write-CleanLog "  RuntimeUnknown:      $RuntimeUnknown"
+Write-CleanLog "  AppLockerClean:      $AppLockerClean"
 
 # ------------------------------------------------------------
 # 12. INVENTARIO MLGPO NO ADMINISTRADORES
@@ -630,19 +804,39 @@ Write-CleanLog ""
 Write-CleanLog "-------------------- PLAN --------------------"
 
 $ActionsPlanned = 0
+$PlanAppLockerDeclared = $false
+$PlanAppLockerRuntime = $false
 
-if ($AppLockerLegacyRecognized) {
+if ($DeclaredLocalLegacy) {
     Write-CleanLog `
-        "[PLAN] Respaldar y retirar politica AppLocker legacy."
+        "[PLAN] Respaldar y retirar politica AppLocker declarada legacy."
+    $PlanAppLockerDeclared = $true
     $ActionsPlanned++
 }
-elseif ($AppLockerXmlString) {
+elseif ($DeclaredUnknown) {
     Write-CleanLog `
-        "[SKIP] AppLocker existe pero no coincide con el patron esperado."
+        "[SKIP] Politica AppLocker declarada desconocida; no se modificara."
 }
 else {
     Write-CleanLog `
-        "[SKIP] No existe AppLocker local que retirar."
+        "[SKIP] Politica AppLocker declarada vacia; nada que retirar."
+}
+
+if ($RuntimeLegacy) {
+    Write-CleanLog `
+        "[PLAN] Respaldar y eliminar archivos runtime AppLocker legacy."
+    Write-CleanLog `
+        "       Se requerira reinicio despues de la limpieza."
+    $PlanAppLockerRuntime = $true
+    $ActionsPlanned++
+}
+elseif ($RuntimeUnknown) {
+    Write-CleanLog `
+        "[SKIP] Runtime AppLocker desconocido: no sera eliminado automaticamente."
+}
+else {
+    Write-CleanLog `
+        "[SKIP] No existen archivos runtime AppLocker que retirar."
 }
 
 if ($LegacyMlgpoFound) {
@@ -715,10 +909,10 @@ catch {
 }
 
 # ------------------------------------------------------------
-# 16. RESPALDAR APPLOCKER
+# 16. RESPALDAR APPLOCKER DECLARADO
 # ------------------------------------------------------------
 
-if ($AppLockerLegacyRecognized) {
+if ($PlanAppLockerDeclared) {
 
     try {
 
@@ -734,15 +928,99 @@ if ($AppLockerLegacyRecognized) {
 
         if (-not (Test-Path $AppLockerBackupPath)) {
             Stop-Clean `
-                "No se pudo verificar el backup de AppLocker."
+                "No se pudo verificar el backup de AppLocker declarado."
         }
 
         Write-CleanLog `
-            "[OK] AppLocker respaldado."
+            "[OK] AppLocker declarado respaldado."
     }
     catch {
         Stop-Clean `
-            "Fallo el respaldo de AppLocker: $($_.Exception.Message)"
+            "Fallo el respaldo de AppLocker declarado: $($_.Exception.Message)"
+    }
+}
+
+# ------------------------------------------------------------
+# 16b. RESPALDAR APPLOCKER RUNTIME
+# ------------------------------------------------------------
+
+if ($PlanAppLockerRuntime) {
+
+    try {
+
+        $RuntimeBackupDir =
+        Join-Path `
+            $BackupRoot `
+            "applocker-runtime"
+
+        New-Item `
+            -ItemType Directory `
+            -Path $RuntimeBackupDir `
+            -Force |
+        Out-Null
+
+        $RuntimeBackupOk = $true
+
+        foreach ($RuntimeFile in $RuntimeFiles) {
+
+            $DestPath =
+            Join-Path `
+                $RuntimeBackupDir `
+                $RuntimeFile.Name
+
+            Copy-Item `
+                -Path $RuntimeFile.FullName `
+                -Destination $DestPath `
+                -Force `
+                -ErrorAction Stop
+
+            if (-not (Test-Path $DestPath)) {
+                Write-CleanLog `
+                    "[ERROR] No se pudo verificar backup de $($RuntimeFile.Name)."
+                $RuntimeBackupOk = $false
+                break
+            }
+
+            $OrigHash =
+            (Get-FileHash `
+                -Path $RuntimeFile.FullName `
+                -Algorithm SHA256
+            ).Hash
+
+            $BackupFileHash =
+            (Get-FileHash `
+                -Path $DestPath `
+                -Algorithm SHA256
+            ).Hash
+
+            if ($OrigHash -ne $BackupFileHash) {
+                Write-CleanLog `
+                    "[ERROR] SHA256 no coincide para $($RuntimeFile.Name)."
+                Write-CleanLog `
+                    "        Original: $OrigHash"
+                Write-CleanLog `
+                    "        Backup:   $BackupFileHash"
+                $RuntimeBackupOk = $false
+                break
+            }
+
+            Write-CleanLog `
+                "[OK] $($RuntimeFile.Name) respaldado."
+            Write-CleanLog `
+                "     SHA256: $OrigHash"
+        }
+
+        if (-not $RuntimeBackupOk) {
+            Stop-Clean `
+                "Abortando: no fue posible respaldar todos los archivos runtime AppLocker."
+        }
+
+        Write-CleanLog `
+            "[OK] Todos los archivos runtime AppLocker respaldados e integridad verificada."
+    }
+    catch {
+        Stop-Clean `
+            "Fallo el respaldo del runtime AppLocker: $($_.Exception.Message)"
     }
 }
 
@@ -810,13 +1088,13 @@ if ($LegacyMlgpoFound) {
 }
 
 # ------------------------------------------------------------
-# 18. RETIRAR APPLOCKER LEGACY
+# 18. RETIRAR APPLOCKER LEGACY - POLITICA DECLARADA
 # ------------------------------------------------------------
 
-if ($AppLockerLegacyRecognized) {
+if ($PlanAppLockerDeclared) {
 
     Write-CleanLog ""
-    Write-CleanLog "-------------------- LIMPIEZA APPLOCKER --------------------"
+    Write-CleanLog "-------------------- LIMPIEZA APPLOCKER DECLARADA --------------------"
 
     try {
 
@@ -835,11 +1113,55 @@ if ($AppLockerLegacyRecognized) {
             -ErrorAction Stop
 
         Write-CleanLog `
-            "[OK] Politica AppLocker local legacy retirada."
+            "[OK] Politica AppLocker declarada legacy retirada."
     }
     catch {
         Stop-Clean `
-            "Fallo al retirar AppLocker: $($_.Exception.Message)"
+            "Fallo al retirar politica AppLocker declarada: $($_.Exception.Message)"
+    }
+}
+
+# ------------------------------------------------------------
+# 18b. RETIRAR APPLOCKER LEGACY - RUNTIME
+# ------------------------------------------------------------
+
+$RuntimeRemoved = $false
+
+if ($PlanAppLockerRuntime) {
+
+    Write-CleanLog ""
+    Write-CleanLog "-------------------- LIMPIEZA APPLOCKER RUNTIME --------------------"
+
+    try {
+
+        Remove-Item `
+            -Path "$AppLockerRuntimeDirectory\*.AppLocker" `
+            -Force `
+            -ErrorAction Stop
+
+        # Verificar que se eliminaron.
+        $RemainingRuntime = @(
+            Get-ChildItem `
+                -Path "$AppLockerRuntimeDirectory\*.AppLocker" `
+                -ErrorAction SilentlyContinue
+        )
+
+        if ($RemainingRuntime.Count -gt 0) {
+            Write-CleanLog `
+                "[WARN] Todavia existen $($RemainingRuntime.Count) archivo(s) *.AppLocker despues del intento de eliminacion."
+            foreach ($Remaining in $RemainingRuntime) {
+                Write-CleanLog "       $($Remaining.Name)"
+            }
+        }
+        else {
+            $RuntimeRemoved = $true
+            Write-CleanLog `
+                "[OK] Archivos runtime AppLocker legacy eliminados."
+        }
+    }
+    catch {
+        Stop-Clean `
+            "Fallo al eliminar runtime AppLocker: $($_.Exception.Message)"
     }
 }
 
@@ -875,44 +1197,55 @@ if ($LegacyMlgpoFound) {
 }
 
 # ------------------------------------------------------------
-# 20. REFRESCAR DIRECTIVAS
+# 20. REFRESCAR DIRECTIVAS (MLGPO)
 # ------------------------------------------------------------
 
-Write-CleanLog ""
-Write-CleanLog "-------------------- ACTUALIZACION --------------------"
+# gpupdate se ejecuta unicamente como mecanismo de refresco para
+# cambios de MLGPO. NO corrige estado residual de AppLocker
+# runtime; eso requiere eliminacion de *.AppLocker + reinicio.
 
-try {
+if ($LegacyMlgpoFound) {
 
-    Write-CleanLog `
-        "[INFO] Ejecutando gpupdate /force..."
+    Write-CleanLog ""
+    Write-CleanLog "-------------------- ACTUALIZACION --------------------"
 
-    $GpUpdate =
-    Start-Process `
-        -FilePath "gpupdate.exe" `
-        -ArgumentList "/force" `
-        -Wait `
-        -PassThru `
-        -NoNewWindow
+    try {
 
-    if ($GpUpdate.ExitCode -eq 0) {
-        Write-CleanLog "[OK] gpupdate finalizo correctamente."
-    }
-    else {
         Write-CleanLog `
-            "[WARN] gpupdate termino con codigo $($GpUpdate.ExitCode)."
+            "[INFO] Ejecutando gpupdate /force (refresco MLGPO)..."
+
+        $GpUpdate =
+        Start-Process `
+            -FilePath "gpupdate.exe" `
+            -ArgumentList "/force" `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+
+        if ($GpUpdate.ExitCode -eq 0) {
+            Write-CleanLog "[OK] gpupdate finalizo correctamente."
+        }
+        else {
+            Write-CleanLog `
+                "[WARN] gpupdate termino con codigo $($GpUpdate.ExitCode)."
+        }
     }
-}
-catch {
-    Write-CleanLog `
-        "[WARN] No fue posible ejecutar gpupdate: $($_.Exception.Message)"
+    catch {
+        Write-CleanLog `
+            "[WARN] No fue posible ejecutar gpupdate: $($_.Exception.Message)"
+    }
 }
 
 # ------------------------------------------------------------
-# 21. VERIFICACION BASICA POST-LIMPIEZA
+# 21. VERIFICACION POST-LIMPIEZA
 # ------------------------------------------------------------
 
 Write-CleanLog ""
 Write-CleanLog "-------------------- POST-CHECK --------------------"
+
+$PostCheckOk = $true
+
+# -- AppLocker Local --
 
 try {
 
@@ -924,7 +1257,7 @@ try {
 
     [xml]$PostXml = $PostAppLocker
 
-    $PostRules = @()
+    $PostLocalRules = @()
 
     if ($PostXml.AppLockerPolicy) {
 
@@ -933,7 +1266,7 @@ try {
             @($PostXml.AppLockerPolicy.RuleCollection)
         ) {
 
-            $PostRules += @(
+            $PostLocalRules += @(
                 $Collection.ChildNodes |
                 Where-Object {
                     $_.NodeType -eq
@@ -943,19 +1276,91 @@ try {
         }
     }
 
-    if ($PostRules.Count -eq 0) {
+    if ($PostLocalRules.Count -eq 0) {
         Write-CleanLog `
-            "[OK] AppLocker local ya no contiene reglas."
+            "[OK] AppLocker Local: 0 reglas."
     }
     else {
         Write-CleanLog `
-            "[WARN] AppLocker todavia contiene $($PostRules.Count) regla(s)."
+            "[WARN] AppLocker Local todavia contiene $($PostLocalRules.Count) regla(s)."
+        $PostCheckOk = $false
     }
 }
 catch {
     Write-CleanLog `
-        "[WARN] No fue posible verificar AppLocker despues de limpiar."
+        "[WARN] No fue posible verificar AppLocker Local despues de limpiar."
+    $PostCheckOk = $false
 }
+
+# -- AppLocker Effective --
+
+try {
+
+    $PostEffective =
+    Get-AppLockerPolicy `
+        -Effective `
+        -Xml `
+        -ErrorAction Stop
+
+    [xml]$PostEffXml = $PostEffective
+
+    $PostEffRules = @()
+
+    if ($PostEffXml.AppLockerPolicy) {
+
+        foreach (
+            $Collection in
+            @($PostEffXml.AppLockerPolicy.RuleCollection)
+        ) {
+
+            $PostEffRules += @(
+                $Collection.ChildNodes |
+                Where-Object {
+                    $_.NodeType -eq
+                    [System.Xml.XmlNodeType]::Element
+                }
+            )
+        }
+    }
+
+    if ($PostEffRules.Count -eq 0) {
+        Write-CleanLog `
+            "[OK] AppLocker Effective: 0 reglas."
+    }
+    else {
+        Write-CleanLog `
+            "[WARN] AppLocker Effective todavia contiene $($PostEffRules.Count) regla(s)."
+        $PostCheckOk = $false
+    }
+}
+catch {
+    Write-CleanLog `
+        "[WARN] No fue posible verificar AppLocker Effective despues de limpiar."
+    $PostCheckOk = $false
+}
+
+# -- AppLocker Runtime --
+
+$PostRuntimeFiles = @(
+    Get-ChildItem `
+        -Path "$AppLockerRuntimeDirectory\*.AppLocker" `
+        -ErrorAction SilentlyContinue
+)
+
+if ($PostRuntimeFiles.Count -eq 0) {
+    Write-CleanLog `
+        "[OK] AppLocker Runtime: 0 archivos *.AppLocker."
+}
+else {
+    Write-CleanLog `
+        "[WARN] AppLocker Runtime: todavia existen $($PostRuntimeFiles.Count) archivo(s) *.AppLocker."
+    foreach ($PostRf in $PostRuntimeFiles) {
+        Write-CleanLog "       $($PostRf.Name)"
+    }
+    $PostCheckOk = $false
+}
+
+# -- MLGPO --
 
 if (-not (Test-Path $LegacyUserPolicyDirectory)) {
     Write-CleanLog `
@@ -964,6 +1369,7 @@ if (-not (Test-Path $LegacyUserPolicyDirectory)) {
 else {
     Write-CleanLog `
         "[WARN] MLGPO No administradores continua presente."
+    $PostCheckOk = $false
 }
 
 # ------------------------------------------------------------
@@ -971,9 +1377,38 @@ else {
 # ------------------------------------------------------------
 
 Write-CleanLog ""
-Write-CleanLog "============================================================"
-Write-CleanLog " LIMPIEZA LEGACY FINALIZADA"
-Write-CleanLog "============================================================"
+
+if ($RuntimeRemoved) {
+
+    Write-CleanLog "============================================================"
+    Write-CleanLog " [REBOOT REQUIRED]"
+    Write-CleanLog "============================================================"
+    Write-CleanLog ""
+    Write-CleanLog "Se elimino runtime AppLocker legacy."
+    Write-CleanLog "Reinicie Windows antes de considerar la limpieza verificada."
+    Write-CleanLog ""
+    Write-CleanLog "Despues del reinicio, ejecute nuevamente este script en modo"
+    Write-CleanLog "simulacion para confirmar que AppLocker quedo limpio:"
+    Write-CleanLog ""
+    Write-CleanLog "  .\scripts\02-CleanLegacyPolicies.ps1"
+    Write-CleanLog ""
+}
+
+if ($PostCheckOk -and -not $RuntimeRemoved) {
+
+    Write-CleanLog "============================================================"
+    Write-CleanLog " LIMPIEZA LEGACY FINALIZADA"
+    Write-CleanLog "============================================================"
+}
+else {
+
+    if (-not $RuntimeRemoved) {
+        Write-CleanLog "============================================================"
+        Write-CleanLog " LIMPIEZA LEGACY FINALIZADA CON ADVERTENCIAS"
+        Write-CleanLog "============================================================"
+    }
+}
+
 Write-CleanLog ""
 Write-CleanLog "Backup:"
 Write-CleanLog "$BackupRoot"
