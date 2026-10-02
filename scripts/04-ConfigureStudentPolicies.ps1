@@ -84,22 +84,29 @@ $LegacyAppLockerRuleIds = @(
 
 # IDs estables del estandar PTS v1.
 $PtsRuleIds = [ordered]@{
-    ExeAdminAll        = "4bf5f944-f2a5-4c17-9c92-e77bd7158ee8"
-    ExeWindows         = "594f9c0b-a3b3-4b7d-9175-17a46895abf9"
-    ExeProgramFiles    = "f869eb0b-5210-40e9-bb7f-dcb2c3d901ae"
+    ExeAdminAll                  = "4bf5f944-f2a5-4c17-9c92-e77bd7158ee8"
+    ExeWindows                   = "594f9c0b-a3b3-4b7d-9175-17a46895abf9"
+    ExeProgramFiles              = "f869eb0b-5210-40e9-bb7f-dcb2c3d901ae"
 
-    MsiAdminAll        = "1444fe79-9a61-4e5d-a8bf-cdde10415221"
-    MsiWindowsInstaller= "8caa5f95-c2ad-4466-9536-dceaafc31909"
+    ExeOneDrive                  = "2d46e927-1845-4b07-a616-56c5e0a6d011"
+    ExeOneDriveFileCoAuth        = "a4877e11-d922-4e4b-91c6-11f81016d022"
+    ExeOneDriveLauncher          = "8f0c9e33-728b-4b1e-b851-92e10526d033"
+    ExeOneDriveStandaloneUpdater = "5b2d1144-883a-4f5c-a1e9-44d32036d044"
+    ExeOneDriveSyncService       = "9e6f3355-094b-4a7d-b6c8-77e43046d055"
+    ExeDefenderSessionHelper     = "3a1b2266-1c8a-4d9f-a2e1-88f54056d066"
 
-    ScriptAdminAll     = "aa4f8c7f-a64f-48fa-95bb-ae232df15aa2"
-    ScriptWindows      = "7468fb46-8099-4f0c-97da-8bd03173fd5e"
-    ScriptProgramFiles = "8789b473-c787-4d99-b962-5dd01a5e43cf"
+    MsiAdminAll                  = "1444fe79-9a61-4e5d-a8bf-cdde10415221"
+    MsiWindowsInstaller          = "8caa5f95-c2ad-4466-9536-dceaafc31909"
 
-    AppxAdminAll       = "b07aef89-a514-482f-917e-7a6b6b149104"
-    AppxMicrosoftWin   = "05763886-3811-4cda-8c1b-12b3554975c4"
-    AppxMicrosoftCorp  = "d10e18a7-5c24-490c-953a-1b68e6e76f6f"
-    AppxDenyStore      = "28b62bb6-8d94-4f82-97e4-cdd633dc4440"
-    AppxDenyInstaller  = "add55965-359c-467c-9a4b-d8b5178fb432"
+    ScriptAdminAll               = "aa4f8c7f-a64f-48fa-95bb-ae232df15aa2"
+    ScriptWindows                = "7468fb46-8099-4f0c-97da-8bd03173fd5e"
+    ScriptProgramFiles           = "8789b473-c787-4d99-b962-5dd01a5e43cf"
+
+    AppxAdminAll                 = "b07aef89-a514-482f-917e-7a6b6b149104"
+    AppxMicrosoftWin             = "05763886-3811-4cda-8c1b-12b3554975c4"
+    AppxMicrosoftCorp            = "d10e18a7-5c24-490c-953a-1b68e6e76f6f"
+    AppxDenyStore                = "28b62bb6-8d94-4f82-97e4-cdd633dc4440"
+    AppxDenyInstaller            = "add55965-359c-467c-9a4b-d8b5178fb432"
 }
 
 if ($EnforceAppLocker) {
@@ -283,6 +290,7 @@ function ConvertTo-LgpoString {
 function Get-NormalizedLgpoEntries {
     param (
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string[]]$Lines
     )
 
@@ -342,18 +350,50 @@ function Invoke-LgpoApplyText {
         [string]$TextPath
     )
 
-    $output = @(
-        & $LgpoPath `
-            /t `
-            $TextPath `
-            2>&1
-    )
+    $stdoutPath = Join-Path $WorkingRoot "lgpo-stdout.txt"
+    $stderrPath = Join-Path $WorkingRoot "lgpo-stderr.txt"
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "LGPO.exe /t fallo con codigo $LASTEXITCODE. Salida: $($output -join ' | ')"
+    $process = Start-Process `
+        -FilePath $LgpoPath `
+        -ArgumentList @(
+        "/t",
+        "`"$TextPath`""
+    ) `
+        -Wait `
+        -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath
+
+    $stdout = @()
+    $stderr = @()
+
+    if (Test-Path $stdoutPath) {
+        $stdout = @(
+            Get-Content $stdoutPath -ErrorAction SilentlyContinue
+        )
     }
 
-    return @($output | ForEach-Object { $_.ToString() })
+    if (Test-Path $stderrPath) {
+        $stderr = @(
+            Get-Content $stderrPath -ErrorAction SilentlyContinue
+        )
+    }
+
+    $output = @($stdout) + @($stderr)
+
+    if ($process.ExitCode -ne 0) {
+        throw (
+            "LGPO.exe /t fallo con codigo {0}. Salida: {1}" -f `
+                $process.ExitCode,
+            ($output -join " | ")
+        )
+    }
+
+    return @(
+        $output |
+        ForEach-Object { $_.ToString() }
+    )
 }
 
 function Get-AppLockerPolicyFingerprint {
@@ -366,7 +406,7 @@ function Get-AppLockerPolicyFingerprint {
 
     foreach (
         $collection in
-        @($PolicyXml.AppLockerPolicy.RuleCollection)
+        @($PolicyXml.SelectNodes("/AppLockerPolicy/RuleCollection"))
     ) {
         if ($null -eq $collection) {
             continue
@@ -801,7 +841,7 @@ SZ:$WallpaperLgpoPath
 User:Non-Administrators
 Software\Microsoft\Windows\CurrentVersion\Policies\System
 WallpaperStyle
-SZ:10
+SZ:4
 
 User:Non-Administrators
 Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop
@@ -905,6 +945,48 @@ $DesiredAppLockerXmlString = @"
         <FilePathCondition Path="%PROGRAMFILES%\*" />
       </Conditions>
     </FilePathRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeOneDrive)" Name="PTS - OneDrive - OneDrive.exe" Description="Permite ejecutable legitimo de OneDrive." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT ONEDRIVE" BinaryName="ONEDRIVE.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeOneDriveFileCoAuth)" Name="PTS - OneDrive - FileCoAuth.exe" Description="Permite ejecutable legitimo de OneDrive FileCoAuth." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT ONEDRIVE" BinaryName="FILECOAUTH.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeOneDriveLauncher)" Name="PTS - OneDrive - OneDriveLauncher.exe" Description="Permite ejecutable legitimo de OneDriveLauncher." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT ONEDRIVE" BinaryName="ONEDRIVELAUNCHER.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeOneDriveStandaloneUpdater)" Name="PTS - OneDrive - OneDriveStandaloneUpdater.exe" Description="Permite ejecutable legitimo de OneDriveStandaloneUpdater." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT ONEDRIVE" BinaryName="ONEDRIVESTANDALONEUPDATER.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeOneDriveSyncService)" Name="PTS - OneDrive - OneDrive.Sync.Service.exe" Description="Permite ejecutable legitimo de OneDrive.Sync.Service." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT ONEDRIVE SYNC SERVICE" BinaryName="ONEDRIVE.SYNC.SERVICE.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
+    <FilePublisherRule Id="$($PtsRuleIds.ExeDefenderSessionHelper)" Name="PTS - Defender - DefenderSessionHelper.exe" Description="Permite ejecutable legitimo de DefenderSessionHelper." UserOrGroupSid="$EveryoneSid" Action="Allow">
+      <Conditions>
+        <FilePublisherCondition PublisherName="O=MICROSOFT CORPORATION, L=REDMOND, S=WASHINGTON, C=US" ProductName="MICROSOFT&#174; WINDOWS&#174; OPERATING SYSTEM" BinaryName="DEFENDERSESSIONHELPER.EXE">
+          <BinaryVersionRange LowSection="*" HighSection="*" />
+        </FilePublisherCondition>
+      </Conditions>
+    </FilePublisherRule>
   </RuleCollection>
 
   <RuleCollection Type="Msi" EnforcementMode="$DesiredAppLockerEnforcement">
@@ -1107,7 +1189,7 @@ try {
 
     foreach (
         $collection in
-        @($CurrentAppLockerXml.AppLockerPolicy.RuleCollection)
+        @($CurrentAppLockerXml.SelectNodes("/AppLockerPolicy/RuleCollection"))
     ) {
         if ($null -eq $collection) {
             continue
@@ -1133,7 +1215,7 @@ try {
 
         foreach (
             $collection in
-            @($CurrentAppLockerXml.AppLockerPolicy.RuleCollection)
+            @($CurrentAppLockerXml.SelectNodes("/AppLockerPolicy/RuleCollection"))
         ) {
             foreach ($rule in @($collection.ChildNodes)) {
                 if (
