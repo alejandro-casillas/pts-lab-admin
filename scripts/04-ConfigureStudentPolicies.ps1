@@ -1291,10 +1291,11 @@ Write-PolicyLog "Runtime AppLocker: $($RuntimeFiles.Count) archivo(s) *.AppLocke
 $LegacyRuntimeGuidsFound = @()
 
 if ($RuntimeFiles.Count -gt 0) {
-    $LegacyRuntimeGuidsFound =
-    Test-RuntimeContainsAnyGuid `
-        -Files $RuntimeFiles `
-        -Guids $LegacyAppLockerRuleIds
+    $LegacyRuntimeGuidsFound = @(
+        Test-RuntimeContainsAnyGuid `
+            -Files $RuntimeFiles `
+            -Guids $LegacyAppLockerRuleIds
+    )
 }
 
 if ($LegacyRuntimeGuidsFound.Count -gt 0) {
