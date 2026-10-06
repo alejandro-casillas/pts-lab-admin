@@ -693,7 +693,34 @@ catch {
 }
 
 # ------------------------------------------------------------
-# 8. PREFLIGHT - LABORATORIO Y ROL
+# 8. PREFLIGHT - SESION ALUMNOS
+# ------------------------------------------------------------
+
+$ProfileIsLoaded = $false
+
+try {
+    $UserProfile = Get-CimInstance Win32_UserProfile -Filter "SID = '$StudentSid'" -ErrorAction Stop
+
+    if ($null -ne $UserProfile -and $UserProfile.Loaded) {
+        $ProfileIsLoaded = $true
+    }
+}
+catch {
+    Stop-Policy `
+        "No fue posible consultar Win32_UserProfile para '$StudentUser': $($_.Exception.Message)"
+}
+
+if ($ProfileIsLoaded) {
+    Stop-Policy (
+        "El perfil de '$StudentUser' esta cargado (sesion activa o no descargada). " +
+        "Cierre completamente la sesion de '$StudentUser' y vuelva a ejecutar este script desde '$SupportUser'."
+    )
+}
+
+Write-PolicyLog "[OK] El perfil de '$StudentUser' no esta cargado."
+
+# ------------------------------------------------------------
+# 9. PREFLIGHT - LABORATORIO Y ROL
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -796,7 +823,7 @@ Write-PolicyLog "     Numero:  $ComputerNumber"
 Write-PolicyLog "     Rol:     $ExpectedRole"
 
 # ------------------------------------------------------------
-# 9. PREFLIGHT - APPIDSVC
+# 10. PREFLIGHT - APPIDSVC
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -822,7 +849,7 @@ catch {
 }
 
 # ------------------------------------------------------------
-# 10. CONSTRUIR MLGPO PTS DESEADO
+# 11. CONSTRUIR MLGPO PTS DESEADO
 # ------------------------------------------------------------
 
 $WallpaperLgpoPath = ConvertTo-LgpoString $WallpaperDestination
@@ -859,7 +886,7 @@ Get-NormalizedLgpoEntries `
     -Lines ($DesiredLgpoText -split "`r?`n")
 
 # ------------------------------------------------------------
-# 11. CONSTRUIR APPLOCKER PTS DESEADO
+# 12. CONSTRUIR APPLOCKER PTS DESEADO
 # ------------------------------------------------------------
 
 $StorePackage = $null
@@ -1066,7 +1093,7 @@ Get-AppLockerPolicyFingerprint `
     -PolicyXml $DesiredAppLockerXml
 
 # ------------------------------------------------------------
-# 12. INVENTARIO BRANDING
+# 13. INVENTARIO BRANDING
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -1105,7 +1132,7 @@ else {
 }
 
 # ------------------------------------------------------------
-# 13. INVENTARIO MLGPO PTS
+# 14. INVENTARIO MLGPO PTS
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -1167,7 +1194,7 @@ if ($MlgpoState -eq "Unknown") {
 }
 
 # ------------------------------------------------------------
-# 14. INVENTARIO APPLOCKER DECLARADO
+# 15. INVENTARIO APPLOCKER DECLARADO
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -1276,7 +1303,7 @@ if ($CurrentAppLockerState -eq "Unknown") {
 }
 
 # ------------------------------------------------------------
-# 15. INVENTARIO APPLOCKER RUNTIME
+# 16. INVENTARIO APPLOCKER RUNTIME
 # ------------------------------------------------------------
 
 $RuntimeFiles = @(
@@ -1320,7 +1347,7 @@ Write-PolicyLog "[OK] No se detectaron GUID legacy conocidos en runtime."
 Write-PolicyLog "Estado AppLocker declarado: $CurrentAppLockerState"
 
 # ------------------------------------------------------------
-# 16. PLAN
+# 17. PLAN
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -1374,7 +1401,7 @@ if ($ActionsPlanned -eq 0) {
 }
 
 # ------------------------------------------------------------
-# 17. SIMULACION
+# 18. SIMULACION
 # ------------------------------------------------------------
 
 if (-not $Apply) {
@@ -1399,7 +1426,7 @@ if (-not $Apply) {
 }
 
 # ------------------------------------------------------------
-# 18. BACKUP
+# 19. BACKUP
 # ------------------------------------------------------------
 
 Write-PolicyLog "-------------------- BACKUP --------------------"
@@ -1484,7 +1511,7 @@ if ($CurrentRuleCount -gt 0) {
 }
 
 # ------------------------------------------------------------
-# 19. APLICAR BRANDING
+# 20. APLICAR BRANDING
 # ------------------------------------------------------------
 
 if ($PlanBranding) {
@@ -1524,7 +1551,7 @@ if ($PlanBranding) {
 }
 
 # ------------------------------------------------------------
-# 20. APLICAR MLGPO
+# 21. APLICAR MLGPO
 # ------------------------------------------------------------
 
 if ($PlanMlgpo) {
@@ -1551,7 +1578,7 @@ if ($PlanMlgpo) {
 }
 
 # ------------------------------------------------------------
-# 21. APLICAR APPLOCKER
+# 22. APLICAR APPLOCKER
 # ------------------------------------------------------------
 
 if ($PlanAppLocker) {
@@ -1573,38 +1600,70 @@ if ($PlanAppLocker) {
 }
 
 # ------------------------------------------------------------
-# 22. ACTUALIZACION DE DIRECTIVAS
+# 23. ACTUALIZACION DE DIRECTIVAS
 # ------------------------------------------------------------
 
-if ($PlanMlgpo) {
+if ($PlanMlgpo -or $PlanAppLocker) {
     Write-PolicyLog ""
     Write-PolicyLog "-------------------- ACTUALIZACION --------------------"
 
-    try {
-        $GpUpdate =
-        Start-Process `
-            -FilePath "gpupdate.exe" `
-            -ArgumentList "/force" `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
+    if ($PlanMlgpo) {
+        try {
+            $GpUpdateUser =
+            Start-Process `
+                -FilePath "gpupdate.exe" `
+                -ArgumentList "/force" `
+                -Wait `
+                -PassThru `
+                -NoNewWindow
 
-        if ($GpUpdate.ExitCode -eq 0) {
-            Write-PolicyLog "[OK] gpupdate finalizo correctamente."
+            if ($GpUpdateUser.ExitCode -eq 0) {
+                Write-PolicyLog "[OK] gpupdate /force finalizo correctamente."
+            }
+            else {
+                Write-PolicyLog `
+                    "[WARN] gpupdate /force termino con codigo $($GpUpdateUser.ExitCode)."
+            }
         }
-        else {
+        catch {
             Write-PolicyLog `
-                "[WARN] gpupdate termino con codigo $($GpUpdate.ExitCode)."
+                "[WARN] No fue posible ejecutar gpupdate /force: $($_.Exception.Message)"
         }
     }
-    catch {
-        Write-PolicyLog `
-            "[WARN] No fue posible ejecutar gpupdate: $($_.Exception.Message)"
+
+    if ($PlanAppLocker) {
+        try {
+            $GpUpdateComputer =
+            Start-Process `
+                -FilePath "gpupdate.exe" `
+                -ArgumentList @(
+                "/target:computer",
+                "/force"
+            ) `
+                -Wait `
+                -PassThru `
+                -NoNewWindow
+
+            if ($GpUpdateComputer.ExitCode -eq 0) {
+                Write-PolicyLog `
+                    "[OK] gpupdate /target:computer /force finalizo correctamente."
+            }
+            else {
+                Write-PolicyLog `
+                    "[WARN] gpupdate /target:computer /force termino con codigo $($GpUpdateComputer.ExitCode)."
+                $PostCheckOk = $false
+            }
+        }
+        catch {
+            Write-PolicyLog `
+                "[WARN] No fue posible ejecutar gpupdate /target:computer: $($_.Exception.Message)"
+            $PostCheckOk = $false
+        }
     }
 }
 
 # ------------------------------------------------------------
-# 23. POST-CHECK
+# 24. POST-CHECK
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
@@ -1739,7 +1798,7 @@ catch {
 }
 
 # ------------------------------------------------------------
-# 24. RESULTADO
+# 25. RESULTADO
 # ------------------------------------------------------------
 
 Write-PolicyLog ""
