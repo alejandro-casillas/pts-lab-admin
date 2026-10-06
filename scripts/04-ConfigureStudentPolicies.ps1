@@ -829,23 +829,98 @@ Write-PolicyLog "     Rol:     $ExpectedRole"
 Write-PolicyLog ""
 Write-PolicyLog "-------------------- APPLOCKER SERVICE --------------------"
 
+$AppIdService = $null
+
 try {
-    $AppIdService =
-    Get-Service -Name "AppIDSvc" -ErrorAction Stop
-
-    Write-PolicyLog "Servicio AppIDSvc:"
-    Write-PolicyLog "  Estado: $($AppIdService.Status)"
-
-    if ($AppIdService.Status -ne "Running") {
-        Stop-Policy `
-            "Application Identity (AppIDSvc) no esta en ejecucion. No se modificara el servicio automaticamente."
-    }
-
-    Write-PolicyLog "[OK] AppIDSvc esta en ejecucion."
+    $AppIdService = Get-Service -Name "AppIDSvc" -ErrorAction Stop
 }
 catch {
-    Stop-Policy `
-        "No fue posible validar AppIDSvc: $($_.Exception.Message)"
+    Stop-Policy "No fue posible consultar el servicio AppIDSvc: $($_.Exception.Message)"
+}
+
+$currentStatus = $AppIdService.Status
+$currentStartType = $AppIdService.StartType
+
+Write-PolicyLog "Servicio AppIDSvc:"
+Write-PolicyLog "  Estado:      $currentStatus"
+Write-PolicyLog "  Tipo inicio: $currentStartType"
+
+$needsStartTypeChange = ($currentStartType -ne "Automatic")
+$needsStatusChange = ($currentStatus -ne "Running")
+
+if (-not $Apply) {
+    if ($needsStartTypeChange) {
+        Write-PolicyLog "  [PLAN] Configurar inicio automatico (sc.exe config appidsvc start=auto)."
+    }
+    if ($needsStatusChange) {
+        Write-PolicyLog "  [PLAN] Iniciar servicio Application Identity (AppIDSvc)."
+    }
+    if (-not $needsStartTypeChange -and -not $needsStatusChange) {
+        Write-PolicyLog "  [SKIP] AppIDSvc ya esta en ejecucion y configurado en inicio automatico."
+    }
+    Write-PolicyLog "[OK] Verificacion de AppIDSvc completada (simulacion)."
+}
+else {
+    if (-not $needsStartTypeChange -and -not $needsStatusChange) {
+        Write-PolicyLog "  [SKIP] AppIDSvc ya esta en ejecucion y configurado en inicio automatico."
+    }
+    else {
+        if ($needsStartTypeChange) {
+            Write-PolicyLog "  [APPLY] Configurando AppIDSvc en inicio automatico..."
+            $scError = $null
+            try {
+                $process = Start-Process `
+                    -FilePath "sc.exe" `
+                    -ArgumentList @("config", "appidsvc", "start=auto") `
+                    -Wait `
+                    -PassThru `
+                    -NoNewWindow
+
+                if ($process.ExitCode -ne 0) {
+                    $scError = "sc.exe config appidsvc fallo con codigo de salida $($process.ExitCode)."
+                }
+            }
+            catch {
+                $scError = $_.Exception.Message
+            }
+
+            if ($null -ne $scError) {
+                Stop-Policy "No fue posible configurar AppIDSvc en inicio automatico: $scError"
+            }
+        }
+
+        if ($needsStatusChange) {
+            Write-PolicyLog "  [APPLY] Iniciando servicio AppIDSvc..."
+            $startError = $null
+            try {
+                Start-Service -Name "AppIDSvc" -ErrorAction Stop
+            }
+            catch {
+                $startError = $_.Exception.Message
+            }
+
+            if ($null -ne $startError) {
+                Stop-Policy "No fue posible iniciar el servicio AppIDSvc: $startError"
+            }
+        }
+    }
+
+    $AppIdServiceFinal = $null
+    try {
+        $AppIdServiceFinal = Get-Service -Name "AppIDSvc" -ErrorAction Stop
+    }
+    catch {
+        Stop-Policy "No fue posible verificar el servicio AppIDSvc tras la configuracion: $($_.Exception.Message)"
+    }
+
+    if ($AppIdServiceFinal.StartType -ne "Automatic" -or $AppIdServiceFinal.Status -ne "Running") {
+        Stop-Policy (
+            "Verificacion final de AppIDSvc fallo. " +
+            "Estado: $($AppIdServiceFinal.Status), Tipo inicio: $($AppIdServiceFinal.StartType)."
+        )
+    }
+
+    Write-PolicyLog "[OK] AppIDSvc esta en ejecucion y configurado en inicio automatico."
 }
 
 # ------------------------------------------------------------
