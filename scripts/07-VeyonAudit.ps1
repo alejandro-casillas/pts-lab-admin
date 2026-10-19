@@ -5,9 +5,12 @@
 # ============================================================
 
 $ExpectedKeyName = "PreparatoriaTonalaSur"
-$ExpectedPrefix = "LAB-A-PC"
 $VeyonPath = "C:\Program Files\Veyon"
 $PublicKeyPath = "C:\ProgramData\Veyon\keys\public\$ExpectedKeyName\key"
+
+$ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDirectory
+$LabsDirectory = Join-Path $ProjectRoot "config\labs"
 
 Write-Host ""
 Write-Host "============================================"
@@ -17,7 +20,67 @@ Write-Host ""
 
 # ---------- NOMBRE ----------
 $ComputerName = $env:COMPUTERNAME
-$NameOK = $ComputerName -like "$ExpectedPrefix*"
+$NameOK = $false
+
+if (Test-Path $LabsDirectory) {
+    $LabFiles = Get-ChildItem `
+        -Path $LabsDirectory `
+        -Filter "*.json" `
+        -File `
+        -ErrorAction SilentlyContinue
+
+    foreach ($LabFile in $LabFiles) {
+        try {
+            $RawContent = Get-Content `
+                $LabFile.FullName `
+                -Raw `
+                -ErrorAction Stop
+
+            if ([string]::IsNullOrWhiteSpace($RawContent)) {
+                continue
+            }
+
+            $LabConfig = $RawContent | ConvertFrom-Json
+
+            if (
+                $null -ne $LabConfig.lab -and
+                -not [string]::IsNullOrWhiteSpace(
+                    $LabConfig.lab.computerPrefix
+                ) -and
+                $ComputerName.StartsWith(
+                    $LabConfig.lab.computerPrefix,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            ) {
+                $LabPrefix = $LabConfig.lab.computerPrefix
+                $Suffix = $ComputerName.Substring($LabPrefix.Length)
+
+                if ($Suffix -match '^\d{2}$') {
+                    $PcNumber = [int]$Suffix
+
+                    $IsTeacher = (
+                        $LabConfig.lab.teacherComputer -and
+                        $PcNumber -eq $LabConfig.lab.teacherComputer.number
+                    )
+
+                    $IsStudent = (
+                        $LabConfig.lab.studentComputers -and
+                        $PcNumber -ge $LabConfig.lab.studentComputers.first -and
+                        $PcNumber -le $LabConfig.lab.studentComputers.last
+                    )
+
+                    if ($IsTeacher -or $IsStudent) {
+                        $NameOK = $true
+                        break
+                    }
+                }
+            }
+        }
+        catch {
+            # Ignorar archivos con errores de parseo
+        }
+    }
+}
 
 Write-Host "Nombre:          $ComputerName"
 
@@ -140,4 +203,4 @@ else {
 }
 
 Write-Host "--------------------------------------------"
-Write-Host ""
+Write-Host ""t ""t ""

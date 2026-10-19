@@ -1414,8 +1414,70 @@ if (
     $CurrentAppLockerState -eq "Clean" -and
     $RuntimeFiles.Count -gt 0
 ) {
-    Stop-Policy `
-        "AppLocker declarado esta limpio pero existen archivos runtime. Estado residual desconocido; no se aplicara 04."
+    $IsKnownEmptyRuntime = $false
+
+    try {
+        $effectiveXmlString = Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop
+
+        $effectiveRuleCount = 0
+        if (-not [string]::IsNullOrWhiteSpace($effectiveXmlString)) {
+            [xml]$effectiveXml = $effectiveXmlString
+            foreach (
+                $rc in
+                @($effectiveXml.SelectNodes("/AppLockerPolicy/RuleCollection"))
+            ) {
+                if ($null -eq $rc) {
+                    continue
+                }
+
+                $effectiveRuleCount += @(
+                    $rc.ChildNodes |
+                    Where-Object {
+                        $_.NodeType -eq [System.Xml.XmlNodeType]::Element
+                    }
+                ).Count
+            }
+        }
+
+        $expectedHash = "5A6BB4D7F95239FBBE9209DCDDED65AF14AA3DF4BA5B9414C349820CC184880B"
+        $fileNames = @($RuntimeFiles | ForEach-Object { $_.Name } | Sort-Object)
+
+        if (
+            $effectiveRuleCount -eq 0 -and
+            $RuntimeFiles.Count -eq 2 -and
+            $fileNames[0] -ieq "DLL.AppLocker" -and
+            $fileNames[1] -ieq "EXE.AppLocker"
+        ) {
+            $filesMatch = $true
+            foreach ($rf in $RuntimeFiles) {
+                if ($rf.Length -ne 240) {
+                    $filesMatch = $false
+                    break
+                }
+
+                $hash = (Get-FileHash -Path $rf.FullName -Algorithm SHA256).Hash
+                if ($hash -ne $expectedHash) {
+                    $filesMatch = $false
+                    break
+                }
+            }
+
+            if ($filesMatch) {
+                $IsKnownEmptyRuntime = $true
+            }
+        }
+    }
+    catch {
+        $IsKnownEmptyRuntime = $false
+    }
+
+    if ($IsKnownEmptyRuntime) {
+        Write-PolicyLog "[OK] Runtime vacio conocido; se permite continuar."
+    }
+    else {
+        Stop-Policy `
+            "AppLocker declarado esta limpio pero existen archivos runtime. Estado residual desconocido; no se aplicara 04."
+    }
 }
 
 Write-PolicyLog "[OK] No se detectaron GUID legacy conocidos en runtime."

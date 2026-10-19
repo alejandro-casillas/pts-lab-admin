@@ -197,30 +197,102 @@ Write-Log "[OK] El script no se esta ejecutando desde '$StudentUser'."
 
 
 # ------------------------------------------------------------
-# Validar hostname Student
+# Validar hostname - Laboratorio y rol
 #
-# Por ahora:
-# LAB-A-PC01 ... LAB-A-PC40 = Student
-# LAB-A-PC00                = Teacher
+# Carga dinamica desde config\labs\*.json
+# (mismo patron que 01-Audit, 02-CleanLegacy, 04-Configure).
 # ------------------------------------------------------------
 
-if ($ComputerName -notmatch '^LAB-A-PC(\d{2})$') {
-    Stop-Script "Hostname no reconocido para Laboratorio A: $ComputerName"
+$LabsDirectory = Join-Path $ProjectRoot "config\labs"
+
+if (-not (Test-Path $LabsDirectory)) {
+    Stop-Script "No existe config\labs."
 }
 
-$PcNumber = [int]$Matches[1]
+$MatchingLabs = @()
 
-if ($PcNumber -eq 0) {
-    Stop-Script "PC-00 es equipo Teacher. Este script solo aplica a equipos Student."
+$LabFiles = Get-ChildItem `
+    -Path $LabsDirectory `
+    -Filter "*.json" `
+    -File `
+    -ErrorAction Stop
+
+foreach ($LabFile in $LabFiles) {
+    try {
+        $RawContent = Get-Content `
+            $LabFile.FullName `
+            -Raw `
+            -ErrorAction Stop
+
+        if ([string]::IsNullOrWhiteSpace($RawContent)) {
+            continue
+        }
+
+        $LabConfig = $RawContent | ConvertFrom-Json
+
+        if (
+            $null -eq $LabConfig.lab -or
+            [string]::IsNullOrWhiteSpace(
+                $LabConfig.lab.computerPrefix
+            )
+        ) {
+            continue
+        }
+
+        $LabPrefix = $LabConfig.lab.computerPrefix
+
+        if (
+            $ComputerName.StartsWith(
+                $LabPrefix,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            $MatchingLabs += $LabConfig.lab
+        }
+    }
+    catch {
+        # Ignorar archivos con errores de parseo
+    }
 }
 
-if ($PcNumber -lt 1 -or $PcNumber -gt 40) {
+if ($MatchingLabs.Count -eq 0) {
+    Stop-Script "Hostname no reconocido en ningun laboratorio configurado: $ComputerName"
+}
+
+if ($MatchingLabs.Count -gt 1) {
+    Stop-Script "El hostname coincide con multiples laboratorios."
+}
+
+$Lab = $MatchingLabs[0]
+
+$LabPrefix = $Lab.computerPrefix
+$Suffix = $ComputerName.Substring($LabPrefix.Length)
+
+if ($Suffix -notmatch '^\d{2}$') {
+    Stop-Script "Hostname no contiene exactamente dos digitos tras el prefijo: $ComputerName"
+}
+
+$PcNumber = [int]$Suffix
+
+if (
+    $Lab.teacherComputer -and
+    $PcNumber -eq $Lab.teacherComputer.number
+) {
+    Stop-Script "PC-$($PcNumber.ToString('D2')) es equipo Teacher. Este script solo aplica a equipos Student."
+}
+
+if (
+    -not $Lab.studentComputers -or
+    $PcNumber -lt $Lab.studentComputers.first -or
+    $PcNumber -gt $Lab.studentComputers.last
+) {
     Stop-Script "Numero de equipo fuera del rango Student esperado: $PcNumber"
 }
 
 Write-Log "[OK] Equipo Student reconocido."
-Write-Log "     Laboratorio: A"
+Write-Log "     Laboratorio: $($Lab.id)"
 Write-Log "     Numero:      $PcNumber"
+
 
 
 # ============================================================
